@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 105" width="110" height="105" overflow="visible">
+  <defs>
+    <style>
+      .zalo { font-family: 'Arial Rounded MT Bold', 'Arial Black', Arial, sans-serif; font-weight: 900; font-size: 48px; fill: #1A4FBA; }
+      .pay  { font-family: 'Arial Rounded MT Bold', 'Arial Black', Arial, sans-serif; font-weight: 900; font-size: 48px; fill: #06C755; }
+    </style>
+  </defs>
+  <text x="2" y="48" class="zalo">Zalo</text>
+  <text x="6" y="90" class="pay">pay</text>
+</svg>

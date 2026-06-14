@@ -1,0 +1,25 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+
+# Runtime data (KHÔNG commit — tự sinh khi chạy)
+output/
+uploads/
+chroma_db/
+.cache/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp

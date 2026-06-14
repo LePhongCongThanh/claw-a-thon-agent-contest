@@ -1,0 +1,29 @@
+# Virtual env & caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local generated data (sẽ dùng volume mount thay vì copy)
+chroma_db/
+output/
+uploads/
+
+# Secrets — KHÔNG đưa .env vào image
+.env
+
+# Git & IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Docs / misc
+*.md
+!README.md
