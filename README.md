@@ -1,11 +1,30 @@
-# Merchant Analytics Assistant
+# Zalopay Merchant Analytics
 
-This project builds two separated merchant analytics workflows with the OpenAI SDK and a Gradio chat UI.
+Hệ thống phân tích hiệu suất thanh toán **đa tác tử (multi-agent)** cho các merchant trên cổng
+Zalopay. Sau khi merchant ký kết, mọi giao dịch đi qua Zalopay; khi TPV (Total Payment Volume)
+của một segment biến động, hệ thống tự động tính toán, chẩn đoán nguyên nhân và đề xuất hành động
+tối ưu PnL. Xây trên **OpenAI Agents SDK**, model chạy qua **GreenNode (VNG Cloud)**, giao diện
+**Gradio** chuẩn thương hiệu Zalopay.
 
-## Internal Workflows
+## Kiến trúc 3 Agent
 
-- File preparation and metrics workflow: cleans an uploaded transaction file, archives the input, calculates MTD TPV, previous-month TPV, and MoM growth, then saves outputs in `output/`.
-- Analytics response workflow: uses saved metrics, saved markdown references, optional public web research, and a concise synthesized rule set derived from the instruction files. The runtime prompt does not paste the full PDF, DOCX, or workbook documentation into the model.
+| Agent | Model | Vai trò |
+| --- | --- | --- |
+| **Agent 2** | MiniMax M2.5 | Giao tiếp người dùng, điều phối, truy vấn tri thức lịch sử |
+| **Agent 1** | Gemma 4-31B | Nghiên cứu + tính toán: đọc file, tính MTD TPV/MoM, web search, crawl website |
+| **Agent 3** | Qwen3-5-27B | Chạy **ngầm** khi upload file: phân tích đa chiều, phân loại, làm giàu RAG (không chặn chat) |
+
+Kết quả được lưu vào **RAG (ChromaDB + sentence-transformers, chạy local)** giúp trả lời câu hỏi
+lịch sử ngày càng chính xác. Agent 1 & 3 ghi log → tự động index; Agent 2 truy vấn semantic.
+
+## Tính năng nổi bật
+
+- **Phản hồi streaming** thời gian thực (lọc reasoning), kèm chỉ báo "đang phân tích/tra cứu".
+- Phân tích cả **dữ liệu bảng** (CSV/XLSX) lẫn **tài liệu** (PDF/Word/PowerPoint) — agent tự chọn tool.
+- **Tính metrics linh hoạt** qua code interpreter (pandas động) — không hardcode schema.
+- **Nghiên cứu web + mạng xã hội** (báo chí, Threads, Facebook) kèm **trích nguồn**.
+- **Xuất báo cáo PDF** tiếng Việt có dấu chuẩn, tổng hợp cả hội thoại, link tải ngay trong chat.
+- **Triển khai Docker + GreenNode AgentBase** (port 8080, `/health`, baseline RAG bake sẵn trong image).
 
 ## Input File
 
@@ -145,6 +164,26 @@ What the puller does / doesn't create:
 | --- | --- | --- |
 | `.env` (API key) | **Yes** | The app won't start without a key; it's personal. |
 | `chroma_db/`, `output/`, `uploads/` | **No** | Auto-created by the volume mounts (or `mkdir` baked in the image). RAG starts empty and grows. |
+
+## Deploy to GreenNode AgentBase
+
+The container is AgentBase-ready: it listens on **port 8080** and exposes **`GET /health`** (200).
+A **baseline RAG** (`chroma_db/`) is baked into the image, so a volume-less runtime still has
+knowledge on first boot.
+
+Steps (using the [greennode-agentbase-skills](https://github.com/vngcloud/greennode-agentbase-skills)):
+
+1. Export IAM service-account creds: `GREENNODE_CLIENT_ID`, `GREENNODE_CLIENT_SECRET`.
+2. Push the amd64 image to AgentBase Container Registry (or copy from Docker Hub via
+   `docker buildx imagetools create`).
+3. Create the runtime (PUBLIC, 1 replica) with an env-file holding the LLM key — **not** the IAM
+   creds (those are auto-injected). The runtime API requires `imageAuth`, so use `--from-cr` (or a
+   registry-credentials file).
+4. The platform returns a public endpoint; verify `GET <endpoint>/health` returns 200.
+
+Env-file passed at deploy holds only `GREENNODE_API_KEY` + `GREENNODE_BASE_URL`
+(see `.env.agentbase`). `GREENNODE_CLIENT_ID/SECRET/AGENT_IDENTITY/ENDPOINT_URL` are injected by
+AgentBase automatically.
 
 ## RAG knowledge base
 

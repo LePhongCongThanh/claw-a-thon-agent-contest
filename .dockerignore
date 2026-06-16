@@ -11,8 +11,11 @@ __pycache__/
 output/
 uploads/
 
-# Secrets — KHÔNG đưa .env vào image
+# Secrets — KHÔNG đưa vào image/build context
 .env
+.env.agentbase
+.agentbase-secrets
+.agentbase-runtime.env
 
 # Git & IDE
 .git/
@@ -27,3 +30,4 @@ uploads/
 # Docs / misc
 *.md
 !README.md
+.agentbase/
