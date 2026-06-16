@@ -1,9 +1,9 @@
-# ZaloPay Merchant Analytics — Agent Knowledge Base
+# Zalopay Merchant Analytics — Agent Knowledge Base
 
 ## 1. Mục tiêu hệ thống
 
-Phân tích hiệu suất thanh toán của từng merchant qua cổng ZaloPay.
-Sau khi ký kết, mọi giao dịch của merchant đều đi qua ZaloPay.
+Phân tích hiệu suất thanh toán của từng merchant qua cổng Zalopay.
+Sau khi ký kết, mọi giao dịch của merchant đều đi qua Zalopay.
 Khi TPV (Total Payment Volume) của một segment giảm, hệ thống cần tìm ra nguyên nhân và đề xuất hành động.
 
 ---

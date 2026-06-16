@@ -11,6 +11,19 @@ services:
     environment:
       GRADIO_SERVER_NAME: 0.0.0.0
       GRADIO_SERVER_PORT: 7860
+      # ── (Tuỳ chọn) tinh chỉnh — bỏ comment để override mặc định trong code ──
+      # Models (GreenNode)
+      # AGENT1_MODEL: google/gemma-4-31b-it      # research/compute agent
+      # AGENT2_MODEL: minimax/minimax-m2.5       # chat/orchestrator agent
+      # AGENT3_MODEL: qwen/qwen3-5-27b           # background deep-analysis agent
+      # Độ ổn định / chống lỗi tool-call JSON ngẫu nhiên
+      # AGENT_MAX_TURNS: "16"                    # số lượt tool tối đa mỗi run
+      # FALLBACK_RETRIES: "3"                    # số lần retry non-streaming khi lỗi tạm thời
+      # AGENT3_MAX_TURNS: "25"
+      # AGENT3_MAX_TOKENS: "8000"
+      # Web research
+      # WEB_RESEARCH_ENABLED: "true"
+      # MERCHANT_WEBSITE_CRAWL_ENABLED: "true"
     # Persist data ra host để không mất khi rebuild container
     volumes:
       - ./output:/app/output

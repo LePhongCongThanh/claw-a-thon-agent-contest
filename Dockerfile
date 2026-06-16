@@ -20,14 +20,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Cài torch CPU-only TRƯỚC để tránh kéo bản CUDA ~2GB (sentence-transformers cần torch)
 RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
 
-# Cài dependencies còn lại
+# Cài dependencies còn lại (gồm: Gradio, OpenAI Agents SDK, ChromaDB + sentence-transformers cho RAG,
+# fpdf2 xuất PDF, và pdfplumber/pypdf/python-docx/python-pptx để đọc tài liệu PDF/Word/PowerPoint).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download embedding model để lần chạy đầu không phải tải (~90MB)
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
-# Copy source code (static/ gồm logo + bundled fonts cho PDF tiếng Việt)
+# Copy source code (3 agent) + static (logo, ảnh nền, bundled fonts cho PDF tiếng Việt)
 COPY app.py merchant_agent_workflow.py rag_indexer.py ./
 COPY static/ ./static/
 

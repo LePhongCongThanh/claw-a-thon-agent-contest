@@ -12,6 +12,12 @@ xlrd==2.0.2
 chromadb==1.5.9
 sentence-transformers==5.1.2
 
+# ── Đọc tài liệu PDF / Word / PowerPoint ───────────────────────
+pdfplumber==0.11.8
+pypdf==6.13.2
+python-docx==1.2.0
+python-pptx==1.0.2
+
 # ── Web stack pinned (khớp venv local đã chạy ổn) ──────────────
 # Gradio 4.44.1 KHÔNG tương thích starlette/fastapi mới hơn:
 # bản mới đổi chữ ký TemplateResponse -> lỗi "TypeError: unhashable type: 'dict'".

@@ -9,7 +9,13 @@ This project builds two separated merchant analytics workflows with the OpenAI S
 
 ## Input File
 
-Upload a CSV or Excel file with these columns:
+The app accepts two kinds of uploads:
+
+- **Tabular data** — CSV, TSV, XLSX, XLS, JSON (transaction data, analyzed with pandas).
+- **Documents** — PDF, Word (.docx), PowerPoint (.pptx), TXT, Markdown (reports/decks; text + tables
+  are extracted and analyzed). The agent picks the right reader automatically based on file type.
+
+For tabular transaction data, the standard columns are:
 
 - `Date`
 - `Merchant`
@@ -31,17 +37,19 @@ If a workbook includes `MoM_Analysis`, the app uses its `Prev_Month_TPV` column 
 
 ## Configure API key (`.env`)
 
-Create a `.env` file in the project root before running (local or Docker):
+Copy `.env.example` to `.env` and fill in your key:
+
+```bash
+cp .env.example .env
+```
 
 ```bash
 GREENNODE_API_KEY=your_key_here
 GREENNODE_BASE_URL=https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1
-OPENAI_MODEL=minimax/minimax-m2.5
 ```
 
 Notes:
-- `OPENAI_MODEL` is optional. The app defaults to `minimax/minimax-m2.5`.
-- Alternative variable names are also accepted: `AI_PLATFORM_API_KEY`, `OPENAI_API_KEY`, `GREEENODE_API_KEY` (3 E's), `OPENAI_BASE_URL`.
+- Alternative variable names are also accepted: `AI_PLATFORM_API_KEY`, `OPENAI_API_KEY`, `GREEENODE_API_KEY` (3 E's), `OPENAI_BASE_URL`. `OPENAI_MODEL` is optional.
 - The app **requires** an API key — it will not start the workflow without one.
 
 ## Run locally (Python)
@@ -86,15 +94,57 @@ How config and data are handled:
 - **API key** — read at runtime from `.env` via `env_file` (NOT baked into the image, so it stays private).
 - **Persistent data** — `output/`, `uploads/`, and `chroma_db/` (the RAG vector store) are mounted as host volumes, so they survive container rebuilds.
 
-### Pulling the image on another machine
+## Run from a pre-built image (pull & run)
 
-Code is in the image, but config and data are not. Whoever runs the image must:
-1. Provide their **own** `.env` (their own API key).
-2. Start with an empty RAG store — it fills up automatically as the app is used.
+If you only have the **image** (pulled from a registry) — not the source — you just need
+Docker, a `.env`, and one command. Code lives in the image; **only the API key must be
+supplied** (data folders are auto-created, the RAG store starts empty and fills up with use).
+
+### A. Owner — push the image once
 
 ```bash
-docker run --env-file .env -p 7860:7860 zalopay-merchant-analytics:latest
+docker tag zalopay-merchant-analytics:latest <registry-user>/zalopay-merchant-analytics:latest
+docker login
+docker push <registry-user>/zalopay-merchant-analytics:latest
 ```
+
+### B. Whoever pulls it — 3 steps
+
+```bash
+# 1. Create .env with YOUR own key (only file you must create)
+cp .env.example .env        # then edit GREENNODE_API_KEY
+
+# 2. Pull
+docker pull <registry-user>/zalopay-merchant-analytics:latest
+
+# 3a. Run with docker run (volume mounts persist data; Docker auto-creates the folders)
+docker run -d -p 7860:7860 \
+  --env-file .env \
+  -v "$(pwd)/chroma_db:/app/chroma_db" \
+  -v "$(pwd)/output:/app/output" \
+  -v "$(pwd)/uploads:/app/uploads" \
+  <registry-user>/zalopay-merchant-analytics:latest
+```
+
+Open <http://localhost:7860>.
+
+### One-command alternative — `docker-compose.deploy.yml`
+
+The repo ships `docker-compose.deploy.yml` (uses `image:`, no build). Hand the puller just
+this file + `.env`:
+
+```bash
+# Point it at the pushed image (or edit the default in the file)
+export MERCHANT_ANALYTICS_IMAGE=<registry-user>/zalopay-merchant-analytics:latest
+docker compose -f docker-compose.deploy.yml up -d
+```
+
+What the puller does / doesn't create:
+
+| Item | Create manually? | Why |
+| --- | --- | --- |
+| `.env` (API key) | **Yes** | The app won't start without a key; it's personal. |
+| `chroma_db/`, `output/`, `uploads/` | **No** | Auto-created by the volume mounts (or `mkdir` baked in the image). RAG starts empty and grows. |
 
 ## RAG knowledge base
 

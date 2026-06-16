@@ -12,6 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 import pandas as pd
+
+try:
+    import numpy as np
+except Exception:  # numpy luôn đi kèm pandas, nhưng phòng hờ
+    np = None  # type: ignore
+
 import requests
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -53,62 +59,63 @@ Data preparation workflow.
 """.strip()
 
 ANALYTICS_INSTRUCTIONS = """
-Bạn là ZaloPay Merchant Analytics Assistant — trợ lý phân tích hiệu suất thanh toán cho các merchant của ZaloPay.
+Bạn là Zalopay Merchant Analytics Assistant — trợ lý phân tích hiệu suất thanh toán cho các merchant của Zalopay.
 
 ## Vai trò
-Sau khi merchant ký kết với ZaloPay, mọi giao dịch của họ đi qua cổng thanh toán ZaloPay.
-Nhiệm vụ của bạn là phân tích TPV (Total Payment Volume) theo từng segment (Merchant × SOF_Type × Acquisition channel),
-tìm nguyên nhân tăng/giảm, và đề xuất hành động cụ thể để tối ưu PnL.
+Sau khi merchant ký kết với Zalopay, mọi giao dịch của họ đi qua cổng thanh toán Zalopay.
+Nhiệm vụ: phân tích TPV (Total Payment Volume), tìm nguyên nhân tăng/giảm, và đề xuất hành động tối ưu PnL.
 
 ## Quy tắc giao tiếp
-- Không tự giới thiệu trừ khi được hỏi. Nếu hỏi, trả lời: "Tôi là trợ lý phân tích merchant của ZaloPay."
+- Không tự giới thiệu trừ khi được hỏi. Nếu hỏi: "Tôi là trợ lý phân tích merchant của Zalopay."
 - KHÔNG nhắc đến tên file, đường dẫn, CSV, JSON, output folder với user. Chỉ trình bày insights.
 - KHÔNG emit tool-call syntax trong câu trả lời.
-- Sau mỗi lần phân tích xong, luôn hỏi user: "Bạn có muốn xuất báo cáo PDF không?"
 
-## Logic phân tích theo 4 Scenarios
+## QUY TẮC HIỂN THỊ (rất quan trọng — chat chỉ render Markdown thuần, KHÔNG render LaTeX/math)
+- TUYỆT ĐỐI KHÔNG dùng cú pháp toán/LaTeX: không `$...$`, không `\\uparrow`, `\\downarrow`, `\\times`, `\\%`.
+- Thể hiện tăng/giảm bằng ký tự Unicode trực tiếp ▲ ▼ hoặc ↑ ↓, hoặc bằng chữ "tăng"/"giảm".
+- Số liệu viết thẳng: "19.2M", "−4.9%", "+9.5%". Dùng dấu % và +/− bình thường.
+- Bảng dùng Markdown table chuẩn. Bold dùng **text**.
+- **TIẾNG VIỆT PHẢI CÓ DẤU ĐẦY ĐỦ VÀ NHẤT QUÁN** trong TOÀN BỘ câu trả lời — cả tiêu đề, heading, bảng,
+  ghi chú và tiêu đề báo cáo PDF. KHÔNG viết tiếng Việt không dấu ("Bao Cao" SAI → "Báo Cáo" ĐÚNG).
 
-### Scenario 1 — ORGANIC CHANNEL ↓
-1. So YoY: nếu seasonal → monitor, không cần action ngay
-2. Nếu bất thường → điều tra:
-   - Competitor lấy thị phần? → counter-campaign
-   - Internal campaign kết thúc? → relaunch
-   - Feedback tiêu cực trên social (Threads, Facebook)? → fix UX, retention campaign
+## TRÍCH NGUỒN (cite) — bắt buộc khi dùng web search / crawl / social / nghiên cứu
+- Mỗi khi dùng thông tin từ web search, crawl website hay social media → CITE nguồn ở CUỐI câu trả lời.
+- Định dạng GỌN: một mục "**Nguồn:**", mỗi link 1 dòng kèm độ tin cậy. Ví dụ:
+  - pharmacity.vn — banner Fundiin (HIGH)
+  - cafef.vn/... — tin khuyến mãi (MEDIUM)
+- Rút gọn URL (domain + path ngắn), không dán URL dài. KHÔNG bịa link — chỉ cite link tool thật trả về.
 
-### Scenario 2 — PAID CHANNEL ↓
-1. Breakdown theo voucher (xem Voucher_Breakdown nếu có)
-2. Phân tích budget:
-   - Budget bị cắt → BÌNH THƯỜNG, đánh giá ROI
-   - Budget giữ nguyên → CHẤT LƯỢNG KÉM, test creative/targeting mới
-   - Budget tăng mà vẫn giảm → MARKET SATURATION, thử voucher thay thế
+## Trả lời LINH HOẠT — không ép khuôn
+- Trả lời ĐÚNG điều user hỏi. Nếu user hỏi 1 ý, trả lời gọn 1 ý — đừng nhồi đủ 6 mục.
+- Tự chọn cấu trúc phù hợp với câu hỏi và dữ liệu thực tế. Không bịa số; chỉ dùng số từ tool trả về.
+- Khi user muốn báo cáo tổng quan, có thể dùng các mục gợi ý: Tổng quan TPV & xu hướng, Segment tăng mạnh,
+  Segment giảm + chẩn đoán, Segment mới, Hành động đề xuất, Web research findings. Đây là GỢI Ý, không bắt buộc.
+- Có thể gợi ý xuất PDF khi phù hợp (vd sau một báo cáo dài), không cần hỏi máy móc sau mỗi câu.
 
-### Scenario 3 — QR CHANNEL ↓
-- KHÔNG tự chẩn đoán. Escalate lên BIZ team / Area Manager kèm: MTD vs Previous, YoY, vùng ảnh hưởng.
+## Độ chi tiết của Summary / Tóm tắt
+- Khi user yêu cầu "summary", "tóm tắt", "tổng hợp" mà KHÔNG nói ngắn → làm ĐẦY ĐỦ, CHI TIẾT.
+  Dài cũng được: bao quát mọi insight quan trọng (số liệu, xu hướng, nguyên nhân, đề xuất, nguồn).
+- Khi user yêu cầu NGẮN ("ngắn gọn", "tóm tắt nhanh", "3 ý chính", "1 đoạn"...) → làm ĐÚNG theo ý user, súc tích.
+- Dù dài hay ngắn: TUYỆT ĐỐI KHÔNG bịa đặt số liệu/sự kiện để chiều ý user hay để báo cáo trông "đầy đủ" hơn.
+  Chỉ trình bày dữ liệu THẬT từ tool/log/hội thoại. Nếu thiếu dữ liệu → nói rõ "chưa có dữ liệu", không phỏng đoán.
 
-### Scenario 4 — GROWTH ↑
-- Organic growth: amplify (PR, social push), replicate với minimal budget
-- Paid growth: kiểm tra ROI trước → nếu dương mới scale budget, monitor ad fatigue
+## Kiến thức tham khảo để chẩn đoán (khung gợi ý — áp dụng linh hoạt, không máy móc)
+- **Organic giảm**: so YoY (seasonal thì monitor); nếu bất thường → competitor lấy share / campaign kết thúc /
+  phốt social (Threads, Facebook) → counter-campaign, relaunch, hoặc fix UX + retention.
+- **Paid giảm**: breakdown voucher → budget cắt (bình thường, xét ROI) / budget giữ mà giảm (chất lượng kém,
+  test creative-targeting) / budget tăng mà vẫn giảm (saturation, đổi voucher).
+- **QR giảm**: thường KHÔNG tự chẩn đoán được → escalate BIZ/Area Manager kèm MTD vs Previous, YoY, vùng ảnh hưởng.
+- **BNPL giảm**: merchant tự ra trả góp riêng (banner Home Credit/Kredivo) → crawl website merchant.
+- **Tăng trưởng**: organic → amplify + replicate (ít budget); paid → check ROI trước rồi mới scale, theo dõi ad fatigue.
 
-## Nguyên nhân thường gặp theo SOF_Type
-- **BNPL drop**: Merchant tự ra dịch vụ trả góp riêng (vd: treo banner Home Credit, Kredivo trên website) → crawl website merchant
-- **VietQR drop**: Lỗi kỹ thuật, campaign offline kết thúc → escalate BIZ
-- **Organic drop**: Phốt trên Threads/Facebook → search social
-- **Paid drop**: Budget thay đổi, voucher kém hiệu quả → xem Voucher_Breakdown
-
-## Web Research
-- Website merchant (HIGH confidence): tìm banner BNPL/trả góp cạnh tranh
-- News/báo chí (MEDIUM confidence): campaign, sự kiện
-- Social public posts (LOW-MEDIUM confidence): phốt, khiếu nại, viral
-- Luôn ghi confidence level và cite URL khi trình bày web findings
-
-## Format output
-Trả lời dạng markdown:
-1. **Executive Summary**: Tổng MTD TPV, MoM growth
-2. **High Growth Segments**: Top tăng mạnh + driver là gì
-3. **Underperforming Segments**: Top giảm + chẩn đoán nguyên nhân theo scenario
-4. **New Segments**: Xuất hiện tháng này
-5. **Recommended Actions**: Hành động cụ thể
-6. **Web Research Findings**: Bằng chứng từ internet (nếu có)
+## Web Research — CHỦ ĐỘNG tìm, KHÔNG hỏi xin phép
+- "Internet" = báo chí/tin tức + mạng xã hội (Threads, Facebook, TikTok) + các bài post/bài viết công khai.
+- Khi user hỏi về một merchant (nguyên nhân, hoạt động, phốt, khuyến mãi...) hoặc nói "tra cứu thêm",
+  "tìm hiểu thêm" → HÃY TỰ ĐỘNG nghiên cứu web NGAY (handoff cho Research Agent). TUYỆT ĐỐI KHÔNG hỏi
+  "bạn có muốn tôi tìm kiếm trên web không?" — cứ tìm rồi báo kết quả.
+- Thử NHIỀU góc truy vấn trước khi kết luận "không tìm thấy": tên merchant + "tin tức"/"khuyến mãi"/
+  "trả góp"/"phốt"/"review"/"Threads"/"Facebook". Chỉ nói "chưa có thông tin" sau khi đã thử vài truy vấn.
+- Confidence: Website merchant = HIGH; Báo chí/news = MEDIUM; Social public posts = LOW-MEDIUM. Luôn cite URL.
 """.strip()
 
 
@@ -684,7 +691,7 @@ def _build_public_research_queries(
 
         if sof_type:
             _append_unique(queries, f"{quoted_merchant} {sof_type} thanh toán", max_queries)
-        _append_unique(queries, f"{quoted_merchant} ZaloPay thanh toán", max_queries)
+        _append_unique(queries, f"{quoted_merchant} Zalopay thanh toán", max_queries)
         _append_unique(queries, f'site:facebook.com "{merchant}" thanh toán', max_queries)
         _append_unique(queries, f'site:threads.net "{merchant}"', max_queries)
         _append_unique(queries, f'site:tiktok.com "{merchant}"', max_queries)
@@ -922,7 +929,7 @@ def _crawl_merchant_website(merchant: str, sof_type: str = "") -> str:
     if all_findings["bnpl_competitors"]:
         lines.append(
             "**BNPL / Installment services found on merchant site** "
-            f"(potential reason for ZaloPay BNPL drop): {', '.join(all_findings['bnpl_competitors'])}"
+            f"(potential reason for Zalopay BNPL drop): {', '.join(all_findings['bnpl_competitors'])}"
         )
     if all_findings["payment_competitors"]:
         lines.append(
@@ -1211,6 +1218,219 @@ def calculate_merchant_metrics(file_path: str, as_of_date: str = "") -> str:
     return json.dumps(summary, indent=2, ensure_ascii=False)
 
 
+# ---------------------------------------------------------------------------
+# Flexible file inspection + dynamic computation (KHÔNG hardcode schema)
+# Agent 1 dùng để tự xem cấu trúc file thật rồi viết pandas phù hợp.
+# ---------------------------------------------------------------------------
+
+def _load_any_file(file_path: str) -> Tuple[Dict[str, "pd.DataFrame"], "pd.DataFrame"]:
+    """Load file bất kỳ định dạng. Trả về (sheets_dict, primary_df).
+
+    - CSV/JSON: sheets = {"data": df}
+    - Excel: sheets = {tên_sheet: df, ...} (đọc TẤT CẢ sheet, không ép sheet nào)
+    """
+    path = Path(file_path).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"File không tồn tại: {path}")
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        df = pd.read_csv(path)
+        return {"data": df}, df
+    if suffix == ".tsv":
+        df = pd.read_csv(path, sep="\t")
+        return {"data": df}, df
+    if suffix in {".xlsx", ".xlsm", ".xls"}:
+        sheets = pd.read_excel(path, sheet_name=None)  # dict tất cả sheet
+        primary = next(iter(sheets.values())) if sheets else pd.DataFrame()
+        return sheets, primary
+    if suffix == ".json":
+        df = pd.read_json(path)
+        return {"data": df}, df
+    raise ValueError(f"Định dạng không hỗ trợ: {suffix}. Dùng CSV/TSV/XLSX/XLS/JSON.")
+
+
+# Định dạng tài liệu (text/narrative) — đọc bằng extract_document_text, KHÔNG phải tabular
+DOCUMENT_SUFFIXES = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".txt", ".md"}
+
+
+def extract_document_text(file_path: str, max_chars: int = 20000) -> str:
+    """Trích xuất text (và bảng) từ tài liệu PDF/Word/PowerPoint/text để agent đọc & phân tích.
+
+    Returns text thuần. Bảng trong PDF được trích thành dạng 'a | b | c' theo dòng.
+    """
+    path = Path(file_path).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"File không tồn tại: {path}")
+    suffix = path.suffix.lower()
+    parts: List[str] = []
+
+    if suffix == ".pdf":
+        try:
+            import pdfplumber
+            with pdfplumber.open(str(path)) as pdf:
+                for i, page in enumerate(pdf.pages, 1):
+                    txt = page.extract_text() or ""
+                    if txt.strip():
+                        parts.append(f"--- Trang {i} ---\n{txt}")
+                    for tbl in page.extract_tables() or []:
+                        rows = [" | ".join(str(c) if c is not None else "" for c in row) for row in tbl]
+                        if rows:
+                            parts.append("[Bảng]\n" + "\n".join(rows))
+        except Exception:
+            # Fallback: pypdf chỉ lấy text
+            from pypdf import PdfReader
+            reader = PdfReader(str(path))
+            for i, page in enumerate(reader.pages, 1):
+                txt = page.extract_text() or ""
+                if txt.strip():
+                    parts.append(f"--- Trang {i} ---\n{txt}")
+
+    elif suffix in {".docx", ".doc"}:
+        import docx
+        doc = docx.Document(str(path))
+        for para in doc.paragraphs:
+            if para.text.strip():
+                parts.append(para.text)
+        for ti, table in enumerate(doc.tables, 1):
+            rows = [" | ".join(cell.text.strip() for cell in row.cells) for row in table.rows]
+            if rows:
+                parts.append(f"[Bảng {ti}]\n" + "\n".join(rows))
+
+    elif suffix in {".pptx", ".ppt"}:
+        from pptx import Presentation
+        prs = Presentation(str(path))
+        for si, slide in enumerate(prs.slides, 1):
+            slide_parts = []
+            for shape in slide.shapes:
+                if shape.has_text_frame and shape.text_frame.text.strip():
+                    slide_parts.append(shape.text_frame.text)
+                if shape.has_table:
+                    tbl = shape.table
+                    rows = [" | ".join(c.text.strip() for c in row.cells) for row in tbl.rows]
+                    slide_parts.append("[Bảng]\n" + "\n".join(rows))
+            if slide_parts:
+                parts.append(f"--- Slide {si} ---\n" + "\n".join(slide_parts))
+
+    elif suffix in {".txt", ".md"}:
+        parts.append(path.read_text(encoding="utf-8", errors="ignore"))
+
+    else:
+        raise ValueError(
+            f"Định dạng tài liệu không hỗ trợ: {suffix}. "
+            "Hỗ trợ: PDF, DOCX, PPTX, TXT, MD (dữ liệu bảng dùng CSV/XLSX)."
+        )
+
+    text = "\n\n".join(parts).strip()
+    if not text:
+        return "(Không trích xuất được nội dung text từ tài liệu — có thể là file scan/ảnh.)"
+    return text[:max_chars]
+
+
+def inspect_data_file(file_path: str, sample_rows: int = 5) -> str:
+    """Trả về cấu trúc file (KHÔNG giả định schema): sheet, cột, dtype, mẫu dòng, thống kê.
+
+    Dùng để Agent 1 hiểu file thật trước khi quyết định cách tính metrics.
+    """
+    sheets, _ = _load_any_file(file_path)
+    report: Dict[str, Any] = {"file": str(Path(file_path).name), "sheets": {}}
+
+    for name, df in sheets.items():
+        cols_info = []
+        for col in df.columns:
+            series = df[col]
+            info: Dict[str, Any] = {"name": str(col), "dtype": str(series.dtype)}
+            non_null = series.dropna()
+            # Gợi ý ngữ nghĩa: ngày, số, hay phân loại
+            if pd.api.types.is_numeric_dtype(series):
+                info["kind"] = "numeric"
+                if len(non_null):
+                    info["min"] = float(non_null.min())
+                    info["max"] = float(non_null.max())
+                    info["sum"] = float(non_null.sum())
+            elif pd.api.types.is_datetime64_any_dtype(series):
+                info["kind"] = "datetime"
+                if len(non_null):
+                    info["min"] = str(non_null.min())
+                    info["max"] = str(non_null.max())
+            else:
+                info["kind"] = "categorical/text"
+                uniques = non_null.astype(str).unique()
+                info["n_unique"] = int(len(uniques))
+                info["examples"] = [str(v) for v in uniques[:8]]
+            info["n_null"] = int(series.isna().sum())
+            cols_info.append(info)
+
+        report["sheets"][name] = {
+            "n_rows": int(len(df)),
+            "n_cols": int(len(df.columns)),
+            "columns": cols_info,
+            "sample": df.head(sample_rows).astype(str).to_dict(orient="records"),
+        }
+    return json.dumps(report, ensure_ascii=False, indent=2, default=str)
+
+
+# Builtins an toàn cho code execution (đủ xử lý pandas, chặn thao tác nguy hiểm như
+# open/eval/exec/__import__/os). True/False/None là keyword nên không cần liệt kê.
+import builtins as _builtins_module
+
+_SAFE_BUILTIN_NAMES = (
+    "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "filter", "float",
+    "format", "frozenset", "int", "isinstance", "issubclass", "len", "list", "map",
+    "max", "min", "print", "range", "repr", "reversed", "round", "set", "slice",
+    "sorted", "str", "sum", "tuple", "zip", "abs",
+)
+_SAFE_BUILTINS = {
+    name: getattr(_builtins_module, name)
+    for name in _SAFE_BUILTIN_NAMES
+    if hasattr(_builtins_module, name)
+}
+
+
+def run_python_on_file(file_path: str, code: str, max_output_chars: int = 6000) -> str:
+    """Chạy code pandas TUỲ Ý trên file đã upload và trả về output.
+
+    Namespace có sẵn:
+      - `pd`, `np`              : pandas, numpy
+      - `df`                    : sheet/bảng chính (đã load)
+      - `sheets`                : dict {tên_sheet: DataFrame} cho mọi sheet
+      - `print(...)`            : in kết quả (được capture trả về)
+
+    KHÔNG cần (và không được) import; pd/np đã sẵn. Không có truy cập os/file-system.
+    """
+    import io
+    import contextlib
+
+    sheets, primary = _load_any_file(file_path)
+    namespace: Dict[str, Any] = {
+        "pd": pd,
+        "np": np,
+        "df": primary,
+        "sheets": sheets,
+        "__builtins__": _SAFE_BUILTINS,
+    }
+
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            exec(code, namespace)  # noqa: S102 — internal analytics tool, namespace bị giới hạn
+    except Exception as exc:
+        out = buffer.getvalue()
+        return (out + f"\n[ERROR] {type(exc).__name__}: {exc}").strip()[:max_output_chars]
+
+    out = buffer.getvalue().strip()
+    # Nếu agent gán biến `result`, append nó vào output cho tiện
+    if "result" in namespace and namespace["result"] is not None:
+        result_val = namespace["result"]
+        if isinstance(result_val, (pd.DataFrame, pd.Series)):
+            out += "\n\n# result:\n" + result_val.to_string()
+        else:
+            out += f"\n\n# result: {result_val}"
+    if not out:
+        out = "(Code chạy xong nhưng không in gì. Dùng print(...) hoặc gán biến `result` để xem kết quả.)"
+    return out[:max_output_chars]
+
+
 def _safe_output_path(file_path: str) -> Path:
     candidate = Path(file_path)
     if not candidate.is_absolute():
@@ -1313,14 +1533,46 @@ def write_agent1_log(
     return str(log_path)
 
 
+def _md_inline_to_plain(text: str) -> str:
+    """Gỡ markdown link [text](url) -> text. Giữ ** cho markdown=True của fpdf2 render bold."""
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = text.replace("`", "")
+    return text
+
+
+def _is_table_separator_row(cells: List[str]) -> bool:
+    """Dòng phân cách markdown table kiểu |:---|:---:|---:|."""
+    return bool(cells) and all(re.fullmatch(r":?-{1,}:?", c.strip()) or c.strip() == "" for c in cells)
+
+
+def _parse_md_table(lines: List[str]) -> List[List[str]]:
+    """Parse các dòng '| a | b |' thành list rows, bỏ dòng phân cách."""
+    rows: List[List[str]] = []
+    for line in lines:
+        body = line.strip().strip("|")
+        cells = [c.strip() for c in body.split("|")]
+        if _is_table_separator_row(cells):
+            continue
+        rows.append(cells)
+    # Chuẩn hóa số cột (pad cho đều)
+    if rows:
+        width = max(len(r) for r in rows)
+        rows = [r + [""] * (width - len(r)) for r in rows]
+    return rows
+
+
 def export_analysis_pdf(analysis_text: str, title: str = "Merchant Analytics Report") -> str:
-    """Generate a PDF report from the analysis text and return the file path.
+    """Generate a clean PDF report from markdown analysis text.
+
+    Renders real tables, proper text wrapping, bold via markdown, and Vietnamese fonts.
 
     Args:
-        analysis_text: The full markdown/text analysis to include in the PDF.
+        analysis_text: Markdown analysis (headings, tables, bullets, bold).
         title: Report title shown at the top of the PDF.
     """
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+    from fpdf.fonts import FontFace
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1331,8 +1583,7 @@ def export_analysis_pdf(analysis_text: str, title: str = "Merchant Analytics Rep
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # Load a Unicode TTF font that supports Vietnamese.
-    # Priority: bundled project font → fpdf2 bundled → macOS system fonts.
+    # Unicode TTF font hỗ trợ tiếng Việt: bundled project font → system macOS.
     font_name = "Helvetica"
     _bundled = BASE_DIR / "static" / "fonts"
     _font_candidates = [
@@ -1353,67 +1604,194 @@ def export_analysis_pdf(analysis_text: str, title: str = "Merchant Analytics Rep
             continue
 
     unicode_font = font_name != "Helvetica"
+    epw = pdf.epw  # effective page width (đã trừ lề)
 
-    def _safe_text(text: str) -> str:
+    def safe(text: str) -> str:
         if unicode_font:
             return text
         return text.encode("latin-1", errors="replace").decode("latin-1")
 
-    # Title
-    pdf.set_font(font_name, "B", 16)
-    pdf.set_fill_color(0, 100, 200)
-    pdf.set_text_color(255, 255, 255)
-    pdf.cell(0, 12, _safe_text(title), ln=True, fill=True, align="C")
-    pdf.ln(4)
+    def write_block(text: str, size: int, style: str = "", gap: float = 1.5,
+                    fill: bool = False, line_h: float = 5.5) -> None:
+        pdf.set_font(font_name, style, size)
+        pdf.multi_cell(
+            epw, line_h, safe(_md_inline_to_plain(text)),
+            markdown=True, fill=fill,
+            new_x=XPos.LMARGIN, new_y=YPos.NEXT,  # FIX: luôn về lề trái dòng kế
+        )
+        if gap:
+            pdf.ln(gap)
 
-    # Timestamp
+    def render_table(rows: List[List[str]]) -> None:
+        if not rows:
+            return
+        pdf.set_font(font_name, "", 9)
+        with pdf.table(
+            text_align="LEFT",
+            headings_style=FontFace(emphasis="BOLD", fill_color=(26, 79, 186), color=(255, 255, 255)),
+            cell_fill_color=(245, 248, 255),
+            cell_fill_mode="ROWS",
+            line_height=6,
+        ) as table:
+            for row in rows:
+                trow = table.row()
+                for cell in row:
+                    trow.cell(safe(_md_inline_to_plain(cell)))
+        pdf.ln(2)
+
+    # ── Title banner ────────────────────────────────────────────
+    pdf.set_font(font_name, "B", 16)
+    pdf.set_fill_color(26, 79, 186)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(0, 12, safe(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True, align="C")
+    pdf.ln(2)
     pdf.set_font(font_name, "", 9)
     pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  ZaloPay Merchant Analytics", ln=True, align="C")
-    pdf.ln(6)
+    pdf.cell(0, 6, f"Generated: {datetime.now():%Y-%m-%d %H:%M:%S}  |  Zalopay Merchant Analytics",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+    pdf.ln(4)
     pdf.set_text_color(0, 0, 0)
 
-    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    # ── Body: parse markdown theo block ─────────────────────────
+    lines = analysis_text.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
 
-    def _strip_inline_md(text: str) -> str:
-        # Bỏ dấu ** _ ` và # còn sót trong nội dung
-        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-        text = re.sub(r"`(.+?)`", r"\1", text)
-        text = text.replace("**", "").replace("`", "")
-        return text
-
-    def _write_line(text: str, font: str, style: str, size: int, h: int, fill: bool = False) -> None:
-        pdf.set_font(font, style, size)
-        pdf.multi_cell(page_w, h, _safe_text(_strip_inline_md(text)), fill=fill)
-
-    # Body — parse markdown-ish headings and content
-    for line in analysis_text.splitlines():
-        stripped = line.strip()
         if not stripped:
-            pdf.ln(3)
+            pdf.ln(1.5)
+            i += 1
             continue
 
-        # Bỏ dòng "# ..." (title trùng) và "---" (separator)
-        if stripped.startswith("# ") or stripped == "---":
+        # Bỏ separator '---' và title cấp 1 (tránh trùng banner)
+        if stripped == "---" or (stripped.startswith("# ") and not stripped.startswith("## ")):
+            i += 1
+            continue
+
+        # Bảng: gom các dòng '|' liên tiếp
+        if stripped.startswith("|"):
+            block = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                block.append(lines[i])
+                i += 1
+            render_table(_parse_md_table(block))
             continue
 
         if stripped.startswith("## "):
             pdf.set_fill_color(230, 240, 255)
-            _write_line(stripped[3:], font_name, "B", 13, 8, fill=True)
-            pdf.ln(2)
+            write_block(stripped[3:], size=13, style="B", fill=True, gap=2, line_h=8)
         elif stripped.startswith("### "):
-            _write_line(stripped[4:], font_name, "B", 11, 7)
-        elif stripped.startswith("**") and stripped.endswith("**"):
-            _write_line(stripped.strip("*"), font_name, "B", 10, 6)
-        elif stripped.startswith("- ") or stripped.startswith("* "):
-            _write_line("  • " + stripped[2:], font_name, "", 10, 6)
-        elif stripped.startswith("|"):
-            _write_line(stripped, font_name, "", 8, 5)
+            write_block(stripped[4:], size=11, style="B", gap=1, line_h=6.5)
+        elif stripped.startswith(("- ", "* ")):
+            write_block("•  " + stripped[2:], size=10.5, gap=0.5)
+        elif re.match(r"^\d+\.\s", stripped):
+            write_block(stripped, size=10.5, gap=0.5)
         else:
-            _write_line(stripped, font_name, "", 10, 6)
+            write_block(stripped, size=10.5, gap=1)
+        i += 1
 
     pdf.output(str(pdf_path))
     return str(pdf_path)
+
+
+# Phát hiện tiếng Việt KHÔNG dấu (heuristic): nhiều từ tiếng Việt hay gặp nhưng viết trần
+_NO_DIACRITIC_HINTS = re.compile(
+    r"\b(tang truong|sut giam|phan tich|danh gia|kien nghi|kenh|nguyen nhan|"
+    r"toi uu|ra soat|kiem tra|day manh|thanh toan|tang|giam|hieu qua|"
+    r"khuyen mai|van hanh|mo rong|nha thuoc|cong cu)\b",
+    re.IGNORECASE,
+)
+
+
+def _likely_missing_diacritics(text: str) -> bool:
+    """True nếu text có dấu hiệu tiếng Việt bị thiếu dấu (cần khôi phục)."""
+    return bool(_NO_DIACRITIC_HINTS.search(text or ""))
+
+
+async def restore_vietnamese_diacritics(text: str) -> str:
+    """Khôi phục dấu tiếng Việt cho text (task hẹp → model làm tin cậy hơn là khi sinh báo cáo dài).
+    GIỮ NGUYÊN markdown, số liệu, URL, cấu trúc — chỉ thêm dấu vào chữ tiếng Việt bị trần.
+    """
+    if not text or not _likely_missing_diacritics(text):
+        return text  # đã đủ dấu → bỏ qua, không tốn LLM call
+    api_key, base_url = _greennode_config()
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    system_prompt = (
+        "Bạn là công cụ KHÔI PHỤC DẤU tiếng Việt. Nhiệm vụ DUY NHẤT: thêm dấu tiếng Việt đầy đủ, "
+        "chuẩn chính tả cho các từ bị viết trần (không dấu). "
+        "TUYỆT ĐỐI GIỮ NGUYÊN: markdown (##, -, |, **), con số, %, ký hiệu, URL, xuống dòng, thứ tự, "
+        "từ tiếng Anh và tên riêng. KHÔNG thêm/bớt/diễn giải nội dung. KHÔNG đổi số liệu. "
+        "Chỉ trả về đúng văn bản đã thêm dấu, không thêm lời nào khác."
+    )
+    try:
+        resp = await client.chat.completions.create(
+            model=os.getenv("DIACRITIC_MODEL", AGENT2_MODEL),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
+            temperature=0.0,
+            max_tokens=int(os.getenv("DIACRITIC_MAX_TOKENS", "4000")),
+        )
+        fixed = (resp.choices[0].message.content or "").strip()
+        # An toàn: chỉ nhận nếu kết quả không rỗng và độ dài hợp lý (tránh model cắt mất nội dung)
+        if fixed and len(fixed) >= 0.6 * len(text):
+            return fixed
+    except Exception:
+        pass
+    return text  # lỗi → giữ nguyên
+
+
+async def synthesize_conversation_report(conversation_text: str, focus: str = "") -> str:
+    """Tổng hợp các Ý CHÍNH của cả cuộc hội thoại thành 1 báo cáo markdown sạch.
+
+    Args:
+        conversation_text: Toàn bộ transcript hội thoại (User/Assistant).
+        focus: Nếu có, chỉ tổng hợp phần liên quan (vd 'Pharmacity', 'kênh BNPL').
+    """
+    api_key, base_url = _greennode_config()
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+    focus_line = (
+        f"CHỈ tổng hợp nội dung liên quan đến: {focus}.\n" if focus.strip() else ""
+    )
+    system_prompt = (
+        "Bạn là trợ lý tổng hợp báo cáo Zalopay Merchant Analytics. "
+        "Nhiệm vụ: đọc cuộc hội thoại và TỔNG HỢP các ý chính thành MỘT báo cáo mạch lạc, "
+        "không lặp, không chào hỏi, không hỏi lại. "
+        "Định dạng Markdown sạch: dùng '## ' cho mục lớn, '- ' cho bullet, bảng markdown cho số liệu, "
+        "'**...**' cho in đậm. TUYỆT ĐỐI KHÔNG dùng LaTeX/math ($...$, \\uparrow). "
+        "TIẾNG VIỆT PHẢI CÓ DẤU ĐẦY ĐỦ VÀ NHẤT QUÁN — cả tiêu đề lẫn nội dung (vd 'Báo Cáo', KHÔNG 'Bao Cao'). "
+        "Nếu hội thoại có trích dẫn nguồn (URL từ web/crawl/social), GIỮ LẠI trong mục '**Nguồn:**' ở cuối, "
+        "rút gọn URL kèm độ tin cậy. "
+        "Làm báo cáo ĐẦY ĐỦ, CHI TIẾT — dài cũng được, bao quát mọi insight quan trọng đã có trong hội thoại. "
+        "TUYỆT ĐỐI KHÔNG bịa đặt số liệu/sự kiện để báo cáo trông đầy đủ hơn — chỉ dùng dữ liệu/insight ĐÃ "
+        "xuất hiện trong hội thoại. Nếu thiếu dữ liệu thì ghi rõ, không phỏng đoán. "
+        "Gợi ý cấu trúc: Tổng quan → Phân tích theo merchant/kênh → Nguyên nhân → Đề xuất hành động → Nguồn."
+    )
+    user_prompt = (
+        f"{focus_line}"
+        "Tổng hợp cuộc hội thoại sau thành một báo cáo merchant analytics hoàn chỉnh:\n\n"
+        f"{conversation_text}"
+    )
+    try:
+        resp = await client.chat.completions.create(
+            model=AGENT2_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=int(os.getenv("REPORT_SYNTH_MAX_TOKENS", "3500")),
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        content = content or conversation_text
+        # Khôi phục dấu nếu model rớt dấu (đảm bảo PDF luôn có dấu nhất quán)
+        content = await restore_vietnamese_diacritics(content)
+        return content
+    except Exception:
+        # Fallback: nếu LLM lỗi, trả về transcript thô để vẫn xuất được PDF
+        return conversation_text
 
 
 # ---------------------------------------------------------------------------
@@ -1480,40 +1858,134 @@ def _is_simple_message(text: str) -> bool:
 
 AGENT1_MODEL = os.getenv("AGENT1_MODEL", "google/gemma-4-31b-it")
 
-AGENT1_INSTRUCTIONS = """You are a ZaloPay merchant analytics research agent (Agent 1).
-Your job: gather data, compute metrics, and ALWAYS write findings to the persistent log.
+AGENT1_INSTRUCTIONS = """You are a Zalopay merchant analytics research agent (Agent 1).
+Your job: gather data, compute metrics ACCURATELY from the real file, and ALWAYS write
+findings to the persistent log.
 
-## Workflow (follow in order)
+## CRITICAL: never assume a fixed file schema
 
-1. **Gather data** using the available tools:
-   - `calculate_merchant_metrics` — when a transaction file is provided
-   - `web_search` — to find news, social posts, competitor activity
-   - `crawl_merchant_website` — to detect competing BNPL/payment services on the merchant's site
-   - `search_history_files` / `read_history_file` — to load past logs for trend comparison (e.g. TPV this month vs last month from logs)
+Uploaded files vary (different column names, layouts, wide/long formats, extra dimensions,
+monthly columns, multiple sheets). NEVER guess columns. Always look at the real file first.
 
-2. **Compute TPV trends** when historical logs exist:
-   - Load past agent1_log_*_metrics_* files to compare MTD_TPV across periods
-   - Calculate MoM or period-over-period change from log data
-   - Include trend direction and % change in your findings
+## Chọn tool theo LOẠI file
+- **Tabular** (CSV, TSV, XLSX, XLS, JSON) → `inspect_file` rồi `run_python`/`calculate_merchant_metrics`.
+- **Document** (PDF, Word .docx, PowerPoint .pptx, TXT, MD) → `read_document` để lấy text + bảng,
+  rồi tự rút trích số liệu/insight từ nội dung đó. Nếu document chứa bảng số liệu, có thể tóm tắt/đối chiếu.
+- Không chắc loại nào → thử `inspect_file` trước; nếu báo "định dạng không hỗ trợ" thì dùng `read_document`.
 
-3. **Write log** — ALWAYS call `write_log` at the end of EVERY task:
-   - Include: metrics summary, TPV trend if available, web research findings, diagnosis, recommended actions
-   - Set `task_type` to: 'metrics', 'web_research', 'crawl', 'tpv_trend', or 'analysis'
-   - Set `merchants` to comma-separated names of merchants analyzed
-   - This log becomes the historical knowledge base Agent 2 uses for future queries
+## Workflow khi có file tabular
 
-4. **Return** a concise structured markdown report to Agent 2. Do not interact with the end user.
+1. **Inspect first** — call `inspect_file` to see actual sheets, columns, dtypes, value
+   ranges and sample rows. Understand what the data really contains before computing.
+
+2. **Choose the computation path:**
+   - If the file clearly has Date + Merchant + SOF_Type + Acq_Type + TPV (or close aliases)
+     → you MAY use `calculate_merchant_metrics` (fast path, also saves structured files).
+   - OTHERWISE (any non-standard structure) → use `run_python` to write custom pandas:
+     map the real columns to what you need, pick the right grouping, choose the period
+     logic that fits the actual dates, and compute the metrics that make sense.
+   - Decide thresholds/period windows from the DATA, not from fixed assumptions. Verify
+     intermediate results with print() before concluding.
+
+3. **Compute what the user actually asked for** — TPV totals, growth %, top/bottom segments,
+   trends over the available periods, per-merchant or per-channel breakdowns, etc. Use
+   `run_python` freely for any aggregation, pivot, or period-over-period calculation.
+
+## Web research — CHỦ ĐỘNG, đa nguồn (KHÔNG hỏi xin phép)
+   - `web_search` — "internet" gồm báo chí/tin tức + mạng xã hội (Threads, Facebook, TikTok) + bài post công khai.
+     Khi cần thông tin ngoài về merchant → GỌI NGAY, thử NHIỀU truy vấn khác góc trước khi kết luận, ví dụ:
+       "<merchant> tin tức", "<merchant> khuyến mãi", "<merchant> trả góp BNPL",
+       "<merchant> phốt review", "<merchant> Threads", "<merchant> Facebook".
+     Chỉ kết luận "chưa có thông tin" SAU KHI đã thử vài truy vấn mà đều rỗng.
+   - `crawl_merchant_website` — phát hiện dịch vụ trả góp/BNPL/thanh toán đối thủ trên website merchant.
+   - `search_history_files` / `read_history_file` — load past logs for trend comparison.
+
+## Always at the end
+4. **Write log** — ALWAYS call `write_log`:
+   - Include: the actual numbers computed, how they were derived, diagnosis, recommendations
+   - Set `task_type`: 'metrics', 'web_research', 'crawl', 'tpv_trend', or 'analysis'
+   - Set `merchants` to comma-separated merchant names analyzed
+5. **Return** a concise structured markdown report to Agent 2. Do not talk to the end user.
 
 ## Rules
-- Never fabricate data. Only report what tools return.
-- Always write the log — even for web research or crawl-only tasks.
-- When user asks about historical TPV, search existing logs first before recalculating.
+- Never fabricate data. Report only what the tools actually return.
+- If inspect shows the file lacks what's needed, say so clearly instead of guessing.
+- When the user asks about historical TPV, search existing logs first before recomputing.
+- **CITE NGUỒN**: khi dùng web_search / crawl_merchant_website / social, LUÔN kèm các URL nguồn
+  (rút gọn) + độ tin cậy (HIGH/MEDIUM/LOW) trong report trả về Agent 2, để Agent 2 cite cho user.
+- Viết tiếng Việt CÓ DẤU đầy đủ, nhất quán (không viết tiếng Việt không dấu).
 """
 
 
 @function_tool
+def agent1_inspect_file(file_path: str, sample_rows: int = 5) -> str:
+    """Inspect ANY uploaded data file WITHOUT assuming a schema. Returns sheet names,
+    column names + dtypes + semantic kind (numeric/datetime/categorical), value ranges,
+    null counts, and sample rows. ALWAYS call this FIRST to understand the real structure
+    before computing anything.
+
+    Args:
+        file_path: Absolute path to the uploaded file (CSV/TSV/XLSX/XLS/JSON).
+        sample_rows: Number of sample rows to preview per sheet (default 5).
+    """
+    try:
+        return inspect_data_file(file_path=file_path, sample_rows=sample_rows)
+    except Exception as exc:
+        return f"Inspect error: {type(exc).__name__}: {exc}"
+
+
+@function_tool
+def agent1_read_document(file_path: str, max_chars: int = 20000) -> str:
+    """Read text + tables from a DOCUMENT file (PDF, Word .docx, PowerPoint .pptx, TXT, MD).
+    Use this for non-tabular files — reports, slide decks, write-ups. For tabular data
+    (CSV/XLSX) use inspect_file + run_python instead.
+
+    Args:
+        file_path: Absolute path to the document.
+        max_chars: Max characters to return (default 20000).
+    """
+    try:
+        return extract_document_text(file_path=file_path, max_chars=max_chars)
+    except Exception as exc:
+        return f"Read document error: {type(exc).__name__}: {exc}"
+
+
+@function_tool
+def agent1_run_python(file_path: str, code: str) -> str:
+    """Run ARBITRARY pandas/numpy code on the uploaded file and return printed output.
+    Use this for FLEXIBLE metric computation when the file does NOT match the standard
+    schema, or when you need custom aggregations, period logic, pivots, or thresholds.
+
+    Preloaded namespace (do NOT import anything):
+      - pd, np         : pandas, numpy
+      - df             : the primary sheet/table
+      - sheets         : dict {sheet_name: DataFrame} for every sheet
+      - print(...)     : capture output; or assign to `result` to auto-display
+
+    Example:
+      code = '''
+      df["Date"] = pd.to_datetime(df["Date"])
+      monthly = df.groupby(df["Date"].dt.to_period("M"))["TPV"].sum()
+      print(monthly)
+      result = monthly.pct_change()*100
+      '''
+
+    Args:
+        file_path: Absolute path to the uploaded data file.
+        code: Python code. pd/np/df/sheets are available; no imports, no file-system access.
+    """
+    try:
+        return run_python_on_file(file_path=file_path, code=code)
+    except Exception as exc:
+        return f"Execution error: {type(exc).__name__}: {exc}"
+
+
+@function_tool
 def agent1_calculate_metrics(file_path: str, as_of_date: str = "") -> str:
-    """Process an uploaded merchant transaction file: clean data, compute MTD TPV, Prev Month TPV, MoM growth, and save outputs.
+    """STANDARD-SCHEMA fast path. Only use when the file already has columns
+    Date, Merchant, SOF_Type, Acq_Type, TPV (or close aliases). Computes MTD TPV,
+    Prev Month TPV, MoM growth and saves structured output/summary files used by the
+    knowledge base. If inspect shows a different structure, use agent1_run_python instead.
 
     Args:
         file_path: Absolute path to the uploaded CSV or Excel file.
@@ -1524,10 +1996,13 @@ def agent1_calculate_metrics(file_path: str, as_of_date: str = "") -> str:
 
 @function_tool
 def agent1_web_search(query: str, max_results: int = 4) -> str:
-    """Search DuckDuckGo for public information about a merchant, campaign, voucher, or market event.
+    """Search the public internet (news sites, articles, and indexed social posts on
+    Threads/Facebook/TikTok) for info about a merchant, campaign, voucher, incident, or market event.
+    Call MULTIPLE times with different angles (news / promotion / installment / 'phốt review' /
+    'Threads' / 'Facebook') before concluding nothing was found.
 
     Args:
-        query: Search query in Vietnamese or English.
+        query: Search query in Vietnamese or English (vd: "Hasaki khuyến mãi", "Hasaki Threads phốt").
         max_results: Maximum number of results to return (default 4).
     """
     try:
@@ -1539,7 +2014,7 @@ def agent1_web_search(query: str, max_results: int = 4) -> str:
 
 @function_tool
 def agent1_crawl_merchant_website(merchant: str, sof_type: str = "") -> str:
-    """Crawl the merchant's official website to detect competing BNPL/installment services or payment methods that may explain a ZaloPay TPV drop.
+    """Crawl the merchant's official website to detect competing BNPL/installment services or payment methods that may explain a Zalopay TPV drop.
 
     Args:
         merchant: Merchant name (e.g. 'Thế Giới Di Động', 'Long Châu').
@@ -1568,7 +2043,15 @@ def _build_agent1() -> Agent:
         name="Research Agent",
         instructions=AGENT1_INSTRUCTIONS,
         model=_make_client(AGENT1_MODEL),
-        tools=[agent1_calculate_metrics, agent1_web_search, agent1_crawl_merchant_website, agent1_write_log],
+        tools=[
+            agent1_inspect_file,
+            agent1_run_python,
+            agent1_read_document,
+            agent1_calculate_metrics,
+            agent1_web_search,
+            agent1_crawl_merchant_website,
+            agent1_write_log,
+        ],
         model_settings=ModelSettings(
             temperature=float(os.getenv("AGENT1_TEMPERATURE", "0.3")),
             max_tokens=int(os.getenv("AGENT1_MAX_TOKENS", "3000")),
@@ -1587,27 +2070,16 @@ AGENT2_MODEL = os.getenv("AGENT2_MODEL", "minimax/minimax-m2.5")
 _PDF_FORMAT_INSTRUCTIONS = """
 ## Quy tắc định dạng khi xuất PDF (export_report_pdf)
 
-Khi user yêu cầu xuất báo cáo PDF, gọi `export_report_pdf` với `analysis_text` tuân thủ:
+Khi user yêu cầu xuất báo cáo PDF, gọi `export_report_pdf` với `analysis_text`.
 
-**CẤU TRÚC BẮT BUỘC:**
+**CẤU TRÚC GỢI Ý (linh hoạt — bỏ mục không liên quan, thêm mục cần thiết):**
 ```
-## Executive Summary
-<tổng MTD TPV, MoM growth toàn hàng, số merchant phân tích>
-
-## Top High Growth Segments
-<top 5 segment tăng mạnh nhất, kèm % growth>
-
-## Top Underperforming Segments
-<top 5 segment giảm, kèm chẩn đoán nguyên nhân theo scenario>
-
-## New Segments
-<segment mới xuất hiện tháng này nếu có>
-
-## Recommended Actions
-<hành động cụ thể theo từng merchant/channel>
-
-## Web Research Findings
-<bằng chứng từ internet nếu có, kèm confidence level>
+## Executive Summary       — tổng TPV, xu hướng chung
+## Segment tăng mạnh        — top tăng + driver
+## Segment giảm             — top giảm + chẩn đoán nguyên nhân
+## Segment mới              — nếu có
+## Hành động đề xuất        — cụ thể theo merchant/channel
+## Web Research Findings    — bằng chứng + confidence (nếu có)
 ```
 
 **QUY TẮC FORMAT ĐỂ TRÁNH LỖI PDF:**
@@ -1622,7 +2094,7 @@ Khi user yêu cầu xuất báo cáo PDF, gọi `export_report_pdf` với `analy
 
 AGENT2_INSTRUCTIONS = f"""{ANALYTICS_INSTRUCTIONS}
 
-You are the user-facing ZaloPay merchant analytics assistant.
+You are the user-facing Zalopay merchant analytics assistant.
 
 Workflow:
 1. **Câu hỏi lịch sử** (TPV tháng trước, lần phân tích trước, trend theo thời gian...):
@@ -1635,10 +2107,10 @@ Workflow:
 
 3. Tổng hợp findings và trả lời user bằng markdown rõ ràng.
 
-4. **Yêu cầu xuất/tải PDF** (user nói "tóm tắt + tải PDF", "xuất báo cáo", "download PDF", "lưu lại file"...):
-   - Soạn nội dung tóm tắt các ý chính theo cấu trúc PDF bên dưới
-   - GỌI `export_report_pdf(analysis_text=<nội dung>, title=<tiêu đề>)` — bắt buộc gọi tool này
-   - Sau khi tool trả về, báo user "Đã tạo báo cáo PDF, file đang được tải về" (KHÔNG nói path)
+4. **Khi user yêu cầu xuất/tải PDF** ("tóm tắt + tải PDF", "xuất báo cáo", "download PDF", "lưu file"...):
+   - Soạn nội dung tóm tắt các ý chính (cấu trúc linh hoạt, xem gợi ý bên dưới)
+   - GỌI `export_report_pdf(analysis_text=<nội dung>, title=<tiêu đề>)`
+   - Sau khi tool trả về, báo "Đã tạo báo cáo PDF, file đang được tải về" (KHÔNG nói path)
 
 5. KHÔNG nhắc đến file path, CSV, JSON, output folder với user.
 6. KHÔNG emit tool-call syntax trong câu trả lời cuối.
@@ -1688,14 +2160,17 @@ def read_history_file(file_path: str, max_characters: int = 12000) -> str:
 
 
 @function_tool
-def export_report_pdf(analysis_text: str, title: str = "Merchant Analytics Report") -> str:
+async def export_report_pdf(analysis_text: str, title: str = "Báo Cáo Phân Tích Merchant") -> str:
     """Export the current analysis as a PDF report and return the file path for download.
     Call this when the user asks to export or download a report.
 
     Args:
         analysis_text: The full analysis text to include in the PDF.
-        title: Report title (default: 'Merchant Analytics Report').
+        title: Report title (default in Vietnamese with diacritics).
     """
+    # Khôi phục dấu tiếng Việt cho cả nội dung lẫn tiêu đề trước khi render PDF
+    analysis_text = await restore_vietnamese_diacritics(analysis_text)
+    title = await restore_vietnamese_diacritics(title)
     return export_analysis_pdf(analysis_text=analysis_text, title=title)
 
 
@@ -1712,6 +2187,102 @@ def _build_agent2(agent1: Agent) -> Agent:
             top_p=float(os.getenv("AGENT2_TOP_P", "0.95")),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Agent 3 — Background Deep-Analysis Agent  (qwen/qwen3-5-27b)
+# Chạy LẶNG THẦM khi user upload file: phân tích đa chiều, phân loại dữ liệu,
+# rồi ghi vào RAG để Agent 1/2 query sau này. KHÔNG ảnh hưởng phản hồi chat.
+# ---------------------------------------------------------------------------
+
+AGENT3_MODEL = os.getenv("AGENT3_MODEL", "qwen/qwen3-5-27b")
+
+AGENT3_INSTRUCTIONS = """You are Agent 3 — the Zalopay background deep-analysis agent.
+You run SILENTLY after a file is uploaded. The user never sees your output directly;
+your only job is to enrich the persistent knowledge base (RAG) with deep, multi-dimensional
+analysis so Agent 1/2 can answer richer questions later.
+
+## Loại file
+- TABULAR (CSV/XLSX/JSON): theo workflow bên dưới (inspect_file → run_python).
+- DOCUMENT (PDF/Word/PPT/TXT): dùng `read_document` để lấy nội dung, rồi rút trích & phân loại các
+  số liệu/insight quan trọng vào log (không dùng run_python breakdown cho document).
+
+## Workflow (tabular — always follow)
+1. `inspect_file` — understand the real structure (sheets, columns, dtypes, ranges). Never assume schema.
+2. `run_python` — compute a THOROUGH multi-dimensional breakdown. Be TURN-EFFICIENT: batch
+   MANY breakdowns into a FEW run_python calls (aim for 2-4 calls total, not dozens). Cover:
+   - Totals & trends per time period (month/quarter) if a date/period exists
+   - Breakdown by EVERY categorical dimension found (merchant, channel/SOF, region, acquisition, etc.)
+   - Cross-tabs between dimensions (e.g. merchant × channel, channel × period)
+   - Growth / change rates period-over-period where possible
+   - Ranking: top & bottom performers per dimension
+   - Classification of each segment into tiers: High growth / Stable / Underperforming / New / Dropped
+   - Anomalies / outliers (sudden spikes or drops); concentration (share of top N in total TPV)
+   Print everything you need in those few calls.
+3. `write_log` — write ONE comprehensive structured markdown log capturing ALL findings above.
+   - task_type = 'deep_analysis'
+   - merchants = comma-separated merchant names found in the data
+   - Self-contained & queryable: clear headings + actual numbers + classifications.
+     Future readers retrieve CHUNKS, so each section must stand alone with concrete numbers.
+
+## Rules (IMPORTANT)
+- You have a LIMITED number of turns. Do 2-4 big run_python calls, then ALWAYS call write_log.
+- NEVER finish without calling write_log — a partial log is far better than no log.
+- Keep the write_log `content` FOCUSED (roughly 400-1200 words): concise headings + key numbers +
+  classifications. Do NOT dump raw giant tables — summarize. Over-long content can break the tool call.
+- In run_python, print compact summaries (use .head(), rounded numbers) — avoid printing huge frames.
+- Never fabricate. Only report what run_python actually returns.
+- You do NOT talk to the user and do NOT hand off. After write_log, stop.
+"""
+
+
+def _build_agent3() -> Agent:
+    return Agent(
+        name="Background Analyst",
+        instructions=AGENT3_INSTRUCTIONS,
+        model=_make_client(AGENT3_MODEL),
+        tools=[agent1_inspect_file, agent1_run_python, agent1_read_document, agent1_write_log],
+        model_settings=ModelSettings(
+            temperature=float(os.getenv("AGENT3_TEMPERATURE", "0.2")),
+            # Lớn để write_log với nội dung dài KHÔNG bị cắt giữa chuỗi JSON (gây 400 Unterminated string)
+            max_tokens=int(os.getenv("AGENT3_MAX_TOKENS", "8000")),
+        ),
+    )
+
+
+# Giữ reference các task nền để không bị garbage-collected giữa chừng
+_BACKGROUND_TASKS: set = set()
+
+
+async def run_background_analysis_async(file_path: str, user_message: str = "") -> None:
+    """Chạy Agent 3 lặng thầm: phân tích sâu file rồi ghi vào RAG. Nuốt mọi lỗi."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        agent3 = _build_agent3()
+        prompt = (
+            f"Uploaded file to deep-analyze: {file_path}\n"
+            f"User context (optional): {user_message or 'N/A'}\n"
+            "Run the full multi-dimensional analysis workflow and write ONE deep_analysis log."
+        )
+        max_turns = int(os.getenv("AGENT3_MAX_TURNS", "25"))
+        await Runner.run(agent3, input=prompt, max_turns=max_turns)
+        log.info("Agent 3 background analysis completed for %s", file_path)
+    except Exception as exc:  # KHÔNG bao giờ để lỗi nền ảnh hưởng app
+        log.warning("Agent 3 background analysis failed: %s", exc)
+
+
+def kick_off_background_analysis(file_path: Optional[str], user_message: str = "") -> None:
+    """Fire-and-forget Agent 3. Không await → không chặn phản hồi của Agent 1/2."""
+    if not file_path:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # không có event loop đang chạy → bỏ qua (vd gọi từ sync context)
+    task = loop.create_task(run_background_analysis_async(file_path, user_message))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 # ---------------------------------------------------------------------------
@@ -1734,36 +2305,205 @@ def _rag_startup_sync() -> None:
 _rag_startup_sync()  # chạy khi module được import lần đầu
 
 
-async def run_merchant_workflow_async(user_message: str, uploaded_file_path: Optional[str] = None) -> str:
-    """Run the multi-agent workflow: Agent 2 (MiniMax) orchestrates, Agent 1 (Gemma) researches."""
-    _greennode_config()  # validate credentials early
-    user_message = (user_message or "").strip() or "Xin chào!"
+# Phát hiện output bị leak tool-call / JSON fragment (vd model xuất '}' hoặc '{...}')
+_LEAK_PATTERN = re.compile(
+    r'^[\s`]*[\{\}\[\]]'                       # bắt đầu bằng { } [ ]
+    r'|"(name|arguments|tool_call|function|parameters)"\s*:'  # khóa JSON tool-call
+    r'|\[TOOL_CALL\]|<tool_call>|functions\.',
+    re.IGNORECASE,
+)
 
-    # Build agents fresh each turn (stateless — history is in saved files)
+
+def _looks_like_tool_leak(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return True
+    # Quá ngắn và toàn ký tự JSON → chắc chắn leak
+    if len(s) <= 3 and s.strip("{}[]() \t\n`"):
+        return True
+    if s in ("{}", "{", "}", "[]", "[", "]"):
+        return True
+    return bool(_LEAK_PATTERN.match(s))
+
+
+def _build_history_input(history: Optional[list], current_message: str) -> Any:
+    """Chuyển history [(user, assistant), ...] thành list input items cho SDK + message hiện tại.
+
+    Trả về string nếu không có history (giữ fast-path), ngược lại list message items.
+    """
+    if not history:
+        return current_message
+    items: List[Dict[str, str]] = []
+    for turn in history[-6:]:  # giữ tối đa 6 lượt gần nhất để không phình context
+        try:
+            user_msg, bot_msg = turn[0], turn[1]
+        except (IndexError, TypeError):
+            continue
+        if user_msg:
+            items.append({"role": "user", "content": str(user_msg)})
+        if bot_msg and not _looks_like_tool_leak(str(bot_msg)):
+            items.append({"role": "assistant", "content": str(bot_msg)})
+    items.append({"role": "user", "content": current_message})
+    return items
+
+
+_LEAK_FALLBACK = (
+    "Xin lỗi, tôi chưa tạo được câu trả lời hoàn chỉnh cho yêu cầu này. "
+    "Bạn thử diễn đạt lại hoặc nêu rõ tên merchant cần kiểm tra giúp tôi nhé."
+)
+
+
+def _is_transient_model_error(exc: Exception) -> bool:
+    """Lỗi tạm thời do model sinh tool-call JSON hỏng / quá tải → nên retry."""
+    msg = str(exc).lower()
+    return any(
+        s in msg for s in
+        ("unterminated string", "bad request", "400", "json", "rate limit",
+         "429", "timeout", "temporarily", "503", "502", "overloaded")
+    )
+
+
+def _friendly_error_message(exc: Exception) -> str:
+    """Thông báo lỗi thân thiện (không dán raw JSON/stacktrace cho user)."""
+    if _is_transient_model_error(exc):
+        return (
+            "Xin lỗi, mô hình gặp trục trặc tạm thời khi xử lý yêu cầu này (thường do sinh dữ liệu "
+            "chưa hoàn chỉnh). Bạn vui lòng thử lại — hoặc diễn đạt ngắn gọn/rõ ràng hơn một chút."
+        )
+    return (
+        "Đã xảy ra lỗi khi xử lý yêu cầu. Vui lòng thử lại hoặc kiểm tra kết nối GreenNode."
+    )
+
+
+def _prepare_agent2_input(
+    user_message: str,
+    uploaded_file_path: Optional[str],
+    history: Optional[list],
+) -> Tuple["Agent", Any]:
+    """Setup chung cho cả chạy thường lẫn streaming: build agents + compose input."""
+    _greennode_config()  # validate credentials early
     agent1 = _build_agent1()
     agent2 = _build_agent2(agent1)
 
-    # Compose the input for Agent 2
     if uploaded_file_path:
-        user_input = (
+        # Kích hoạt Agent 3 chạy NỀN (không await) — phân tích sâu + đẩy RAG, không chặn chat
+        kick_off_background_analysis(uploaded_file_path, user_message)
+        current = (
             f"{user_message}\n\n"
             f"[Uploaded file: {uploaded_file_path}] "
             "Please hand off to the Research Agent to process this file and then analyze the results."
         )
-    elif _is_simple_message(user_message):
-        # Fast path: skip agent overhead for greetings
-        user_input = user_message
     else:
-        user_input = user_message
+        current = user_message
 
+    if not uploaded_file_path and _is_simple_message(user_message) and not history:
+        agent_input: Any = current
+    else:
+        agent_input = _build_history_input(history, current)
+    return agent2, agent_input
+
+
+async def run_merchant_workflow_async(
+    user_message: str,
+    uploaded_file_path: Optional[str] = None,
+    history: Optional[list] = None,
+) -> str:
+    """Run the multi-agent workflow (non-streaming): Agent 2 orchestrates, Agent 1 researches.
+
+    Args:
+        user_message: tin nhắn hiện tại của user.
+        uploaded_file_path: file upload (nếu có) → kích hoạt Agent 1 + Agent 3.
+        history: list [(user, assistant), ...] các lượt TRƯỚC để giữ ngữ cảnh follow-up.
+    """
+    user_message = (user_message or "").strip() or "Xin chào!"
+    agent2, agent_input = _prepare_agent2_input(user_message, uploaded_file_path, history)
+    run_max_turns = int(os.getenv("AGENT_MAX_TURNS", "16"))
+    last_exc: Optional[Exception] = None
+    for attempt in range(int(os.getenv("FALLBACK_RETRIES", "3"))):  # malformed-JSON ngẫu nhiên → retry
+        try:
+            result = await Runner.run(agent2, input=agent_input, max_turns=run_max_turns)
+            output = (result.final_output or "").strip()
+            if _looks_like_tool_leak(output):
+                return _LEAK_FALLBACK
+            return output or "Không có kết quả. Vui lòng thử lại."
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient_model_error(exc):
+                break
+    return _friendly_error_message(last_exc) if last_exc else "Không có kết quả. Vui lòng thử lại."
+
+
+async def run_merchant_workflow_stream(
+    user_message: str,
+    uploaded_file_path: Optional[str] = None,
+    history: Optional[list] = None,
+):
+    """Streaming version: yield (partial_text, is_final) khi agent đang sinh chữ.
+
+    - Trong lúc tool-call/handoff (chưa có chữ) → không yield → UI vẫn hiện typing dots.
+    - Khi agent sinh text → yield text tích lũy dần (is_final=False).
+    - Kết thúc → yield (final_output đã làm sạch, True).
+    """
+    user_message = (user_message or "").strip() or "Xin chào!"
     try:
-        result = await Runner.run(agent2, input=user_input)
-        return result.final_output or "Không có kết quả. Vui lòng thử lại."
+        agent2, agent_input = _prepare_agent2_input(user_message, uploaded_file_path, history)
     except Exception as exc:
-        return (
-            f"Đã xảy ra lỗi khi xử lý yêu cầu: {exc}\n\n"
-            "Vui lòng kiểm tra kết nối GreenNode và thử lại."
-        )
+        yield (f"Đã xảy ra lỗi khi xử lý yêu cầu: {exc}", True)
+        return
+
+    # Chỉ stream TEXT đầu ra thật, KHÔNG stream reasoning (ResponseReasoningTextDeltaEvent)
+    try:
+        from openai.types.responses import ResponseTextDeltaEvent
+    except Exception:
+        ResponseTextDeltaEvent = None  # type: ignore
+
+    last_exc: Optional[Exception] = None
+    accumulated = ""
+    run_max_turns = int(os.getenv("AGENT_MAX_TURNS", "16"))  # flow nhiều tool (RAG+web+crawl) cần nhiều lượt
+    if True:  # ── Lượt 1: STREAMING (UX nhanh) ──
+        try:
+            result = Runner.run_streamed(agent2, input=agent_input, max_turns=run_max_turns)
+            async for event in result.stream_events():
+                if getattr(event, "type", "") != "raw_response_event":
+                    continue
+                data = getattr(event, "data", None)
+                if ResponseTextDeltaEvent is not None:
+                    if not isinstance(data, ResponseTextDeltaEvent):
+                        continue
+                elif type(data).__name__ != "ResponseTextDeltaEvent":
+                    continue
+                delta = getattr(data, "delta", None)
+                if isinstance(delta, str) and delta:
+                    accumulated += delta
+                    yield (accumulated, False)
+
+            final = (getattr(result, "final_output", None) or accumulated or "").strip()
+            if _looks_like_tool_leak(final):
+                final = _LEAK_FALLBACK
+            yield (final or "Không có kết quả. Vui lòng thử lại.", True)
+            return
+        except Exception as exc:
+            last_exc = exc
+
+    # ── Lượt 2+: FALLBACK NON-STREAMING, retry NHIỀU lần ──
+    # Lỗi malformed-JSON là NGẪU NHIÊN → mỗi lần thử lại có cơ hội thành công. Non-streaming để
+    # server tự ráp response (ổn hơn streaming). Vẫn fallback dù đã stream preamble ("Để tôi tìm...")
+    # vì preamble KHÔNG phải câu trả lời thật — kết quả non-streaming sẽ thay thế nó.
+    if _is_transient_model_error(last_exc):
+        for _ in range(int(os.getenv("FALLBACK_RETRIES", "3"))):
+            try:
+                result = await Runner.run(agent2, input=agent_input, max_turns=run_max_turns)
+                final = (getattr(result, "final_output", None) or "").strip()
+                if _looks_like_tool_leak(final):
+                    final = _LEAK_FALLBACK
+                yield (final or "Không có kết quả. Vui lòng thử lại.", True)
+                return
+            except Exception as exc2:
+                last_exc = exc2
+                if not _is_transient_model_error(exc2):
+                    break  # lỗi không phải tạm thời → ngừng retry
+
+    yield (_friendly_error_message(last_exc) if last_exc else "Không có kết quả. Vui lòng thử lại.", True)
 
 
 def run_merchant_workflow(user_message: str, uploaded_file_path: Optional[str] = None) -> str:
