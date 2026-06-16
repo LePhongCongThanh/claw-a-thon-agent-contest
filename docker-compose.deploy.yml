@@ -11,12 +11,12 @@ services:
     image: ${MERCHANT_ANALYTICS_IMAGE:-zalopay-merchant-analytics:latest}
     container_name: merchant-analytics
     ports:
-      - "7860:7860"
+      - "7860:8080"   # localhost:7860 → container listen 8080 (chuẩn AgentBase)
     env_file:
       - .env                       # API key đọc lúc chạy (không nằm trong image)
     environment:
       GRADIO_SERVER_NAME: 0.0.0.0
-      GRADIO_SERVER_PORT: 7860
+      GRADIO_SERVER_PORT: 8080
     volumes:
       - ./output:/app/output       # báo cáo, log
       - ./uploads:/app/uploads     # file upload

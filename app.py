@@ -554,13 +554,34 @@ def build_app() -> gr.Blocks:
     return demo
 
 
-if __name__ == "__main__":
+def create_asgi_app():
+    """Mount Gradio vào FastAPI + thêm /health (AgentBase yêu cầu GET /health → 200)."""
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    build_app().launch(
-        # 0.0.0.0 trong Docker để truy cập từ ngoài container; mặc định 127.0.0.1 khi chạy local
-        server_name=os.getenv("GRADIO_SERVER_NAME", "127.0.0.1"),
-        server_port=_configured_server_port() or 7860,
-        show_api=False,
-        show_error=True,
-        allowed_paths=[str(OUTPUT_DIR.resolve())],  # cho phép serve PDF qua link /file= trong chat
+
+    fastapi_app = FastAPI(title="Zalopay Merchant Analytics")
+
+    @fastapi_app.get("/health")
+    def health() -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    demo = build_app()
+    demo.queue()  # bật queue cho streaming generator (bot_respond)
+    # Mount Gradio tại "/"; route /health khai báo trước nên không bị che
+    return gr.mount_gradio_app(
+        fastapi_app,
+        demo,
+        path="/",
+        allowed_paths=[str(OUTPUT_DIR.resolve())],  # serve PDF qua link /file= trong chat
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # AgentBase yêu cầu container listen 8080; local có thể override bằng GRADIO_SERVER_PORT
+    host = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
+    port = _configured_server_port() or 8080
+    uvicorn.run(create_asgi_app(), host=host, port=port)

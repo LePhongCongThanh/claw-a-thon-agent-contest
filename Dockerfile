@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     GRADIO_SERVER_NAME=0.0.0.0 \
-    GRADIO_SERVER_PORT=7860 \
+    GRADIO_SERVER_PORT=8080 \
     HF_HOME=/app/.cache/huggingface
 
 WORKDIR /app
@@ -32,13 +32,18 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 COPY app.py merchant_agent_workflow.py rag_indexer.py ./
 COPY static/ ./static/
 
-# Tạo thư mục runtime (sẽ mount volume ở docker-compose)
+# Bake BASELINE RAG vào image: môi trường không có volume (AgentBase) vẫn có sẵn kiến thức.
+# Local docker-compose mount ./chroma_db sẽ che (shadow) cái này → dùng data host.
+# Dùng wildcard [b] để OPTIONAL: nếu thư mục chroma_db không có (vd clone mới) thì bỏ qua, không fail.
+COPY chroma_d[b]/ ./chroma_db/
+
+# Tạo thư mục runtime còn lại (mkdir -p idempotent, giữ chroma_db đã copy)
 RUN mkdir -p output uploads chroma_db
 
-EXPOSE 7860
+EXPOSE 8080
 
-# Healthcheck — Gradio phục vụ trên /
+# Healthcheck — AgentBase yêu cầu GET /health → 200 trên port 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://localhost:7860/ || exit 1
+    CMD curl -fsS http://localhost:8080/health || exit 1
 
 CMD ["python", "app.py"]

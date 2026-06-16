@@ -6,8 +6,8 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
-# Local generated data (sẽ dùng volume mount thay vì copy)
-chroma_db/
+# Runtime data — output/uploads dùng volume mount (local) hoặc ephemeral (AgentBase).
+# chroma_db KHÔNG loại: được bake vào image làm BASELINE RAG cho môi trường không có volume (AgentBase).
 output/
 uploads/
 
